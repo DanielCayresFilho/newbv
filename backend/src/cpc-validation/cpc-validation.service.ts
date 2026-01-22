@@ -71,13 +71,19 @@ export class CpcValidationService {
         params.append('telefone', phone);
       }
 
+      const fullUrl = `${this.apiUrl}/validate-contract?${params.toString()}`;
+      this.logger.log(
+        `[CPC REQUEST] GET ${fullUrl}`,
+        'CpcValidationService',
+      );
+
       const response = await axios.get<CpcApiResponse>(
-        `${this.apiUrl}/validate-contract?${params.toString()}`,
+        fullUrl,
         {
           headers: {
             'Authorization': this.authHeader,
           },
-          timeout: 10000,
+          timeout: 30000,
         },
       );
 
@@ -111,13 +117,19 @@ export class CpcValidationService {
         segmento: segment,
       });
 
+      const fullUrl = `${this.apiUrl}/check-acionamento?${params.toString()}`;
+      this.logger.log(
+        `[CPC REQUEST] GET ${fullUrl}`,
+        'CpcValidationService',
+      );
+
       const response = await axios.get<CpcApiResponse>(
-        `${this.apiUrl}/check-acionamento?${params.toString()}`,
+        fullUrl,
         {
           headers: {
             'Authorization': this.authHeader,
           },
-          timeout: 10000,
+          timeout: 30000,
         },
       );
 
@@ -145,19 +157,27 @@ export class CpcValidationService {
     }
 
     try {
+      const fullUrl = `${this.apiUrl}/register-acionamento`;
+      const payload = {
+        telefone: phone,
+        contrato: contract,
+        segmento: segment,
+      };
+
+      this.logger.log(
+        `[CPC REQUEST] POST ${fullUrl} | Payload: ${JSON.stringify(payload)}`,
+        'CpcValidationService',
+      );
+
       const response = await axios.post<CpcApiResponse>(
-        `${this.apiUrl}/register-acionamento`,
-        {
-          telefone: phone,
-          contrato: contract,
-          segmento: segment,
-        },
+        fullUrl,
+        payload,
         {
           headers: {
             'Authorization': this.authHeader,
             'Content-Type': 'application/json',
           },
-          timeout: 10000,
+          timeout: 30000,
         },
       );
 
