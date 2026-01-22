@@ -62,16 +62,13 @@ export class CpcValidationService {
     }
 
     try {
-      const params = new URLSearchParams({
-        contrato: contract,
-        segmento: segment,
-      });
-
+      // Usar encodeURIComponent para garantir %20 em vez de + para espaços
+      let queryString = `contrato=${encodeURIComponent(contract)}&segmento=${encodeURIComponent(segment)}`;
       if (phone) {
-        params.append('telefone', phone);
+        queryString += `&telefone=${encodeURIComponent(phone)}`;
       }
 
-      const fullUrl = `${this.apiUrl}/validate-contract?${params.toString()}`;
+      const fullUrl = `${this.apiUrl}/validate-contract?${queryString}`;
       this.logger.log(
         `[CPC REQUEST] GET ${fullUrl}`,
         'CpcValidationService',
@@ -111,13 +108,10 @@ export class CpcValidationService {
     }
 
     try {
-      const params = new URLSearchParams({
-        contrato: contract,
-        telefone: phone,
-        segmento: segment,
-      });
+      // Usar encodeURIComponent para garantir %20 em vez de + para espaços
+      const queryString = `contrato=${encodeURIComponent(contract)}&telefone=${encodeURIComponent(phone)}&segmento=${encodeURIComponent(segment)}`;
 
-      const fullUrl = `${this.apiUrl}/check-acionamento?${params.toString()}`;
+      const fullUrl = `${this.apiUrl}/check-acionamento?${queryString}`;
       this.logger.log(
         `[CPC REQUEST] GET ${fullUrl}`,
         'CpcValidationService',
