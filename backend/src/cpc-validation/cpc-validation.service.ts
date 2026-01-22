@@ -1,0 +1,257 @@
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import axios, { AxiosError } from 'axios';
+import { AppLoggerService } from '../logger/logger.service';
+
+export interface CpcApiResponse {
+  sucesso: boolean;
+  mensagem: string;
+}
+
+export interface CanContactResult {
+  allowed: boolean;
+  reason: string;
+}
+
+@Injectable()
+export class CpcValidationService {
+  private readonly apiUrl: string;
+  private readonly apiUser: string;
+  private readonly apiPassword: string;
+  private readonly enabled: boolean;
+  private readonly authHeader: string;
+
+  constructor(
+    private configService: ConfigService,
+    private logger: AppLoggerService,
+  ) {
+    this.apiUrl = this.configService.get<string>('CPC_API_URL') || '';
+    this.apiUser = this.configService.get<string>('CPC_API_USER') || 'Vend';
+    this.apiPassword = this.configService.get<string>('CPC_API_PASSWORD') || '';
+    this.enabled = this.configService.get<string>('CPC_API_ENABLED') === 'true';
+
+    // Gerar header de autenticação Basic
+    const credentials = `${this.apiUser}:${this.apiPassword}`;
+    this.authHeader = `Basic ${Buffer.from(credentials).toString('base64')}`;
+
+    if (this.enabled) {
+      this.logger.log(
+        `CPC Validation Service inicializado - URL: ${this.apiUrl}`,
+        'CpcValidationService',
+      );
+    }
+  }
+
+  /**
+   * Verifica se o serviço está habilitado
+   */
+  isEnabled(): boolean {
+    return this.enabled && !!this.apiUrl;
+  }
+
+  /**
+   * Valida se o contrato existe na base do parceiro
+   */
+  async validateContract(
+    contract: string,
+    segment: string,
+    phone?: string,
+  ): Promise<CpcApiResponse> {
+    if (!this.isEnabled()) {
+      return { sucesso: true, mensagem: 'CPC API desabilitada' };
+    }
+
+    try {
+      const params = new URLSearchParams({
+        contrato: contract,
+        segmento: segment,
+      });
+
+      if (phone) {
+        params.append('telefone', phone);
+      }
+
+      const response = await axios.get<CpcApiResponse>(
+        `${this.apiUrl}/validate-contract?${params.toString()}`,
+        {
+          headers: {
+            'Authorization': this.authHeader,
+          },
+          timeout: 10000,
+        },
+      );
+
+      this.logger.log(
+        `validate-contract: contrato=${contract}, segmento=${segment} => ${response.data.mensagem}`,
+        'CpcValidationService',
+      );
+
+      return response.data;
+    } catch (error) {
+      return this.handleApiError(error, 'validate-contract');
+    }
+  }
+
+  /**
+   * Verifica se já existe acionamento CPC no dia para o telefone/contrato
+   */
+  async checkAcionamento(
+    contract: string,
+    phone: string,
+    segment: string,
+  ): Promise<CpcApiResponse> {
+    if (!this.isEnabled()) {
+      return { sucesso: true, mensagem: 'CPC API desabilitada' };
+    }
+
+    try {
+      const params = new URLSearchParams({
+        contrato: contract,
+        telefone: phone,
+        segmento: segment,
+      });
+
+      const response = await axios.get<CpcApiResponse>(
+        `${this.apiUrl}/check-acionamento?${params.toString()}`,
+        {
+          headers: {
+            'Authorization': this.authHeader,
+          },
+          timeout: 10000,
+        },
+      );
+
+      this.logger.log(
+        `check-acionamento: contrato=${contract}, telefone=${phone}, segmento=${segment} => ${response.data.mensagem}`,
+        'CpcValidationService',
+      );
+
+      return response.data;
+    } catch (error) {
+      return this.handleApiError(error, 'check-acionamento');
+    }
+  }
+
+  /**
+   * Registra um novo acionamento CPC
+   */
+  async registerAcionamento(
+    contract: string,
+    phone: string,
+    segment: string,
+  ): Promise<CpcApiResponse> {
+    if (!this.isEnabled()) {
+      return { sucesso: true, mensagem: 'CPC API desabilitada' };
+    }
+
+    try {
+      const response = await axios.post<CpcApiResponse>(
+        `${this.apiUrl}/register-acionamento`,
+        {
+          telefone: phone,
+          contrato: contract,
+          segmento: segment,
+        },
+        {
+          headers: {
+            'Authorization': this.authHeader,
+            'Content-Type': 'application/json',
+          },
+          timeout: 10000,
+        },
+      );
+
+      this.logger.log(
+        `register-acionamento: contrato=${contract}, telefone=${phone}, segmento=${segment} => ${response.data.mensagem}`,
+        'CpcValidationService',
+      );
+
+      return response.data;
+    } catch (error) {
+      return this.handleApiError(error, 'register-acionamento');
+    }
+  }
+
+  /**
+   * Método completo: valida contrato e verifica se pode contactar
+   * Retorna se o contato pode ser acionado ou não
+   */
+  async canContact(
+    contract: string,
+    phone: string,
+    segment: string,
+  ): Promise<CanContactResult> {
+    if (!this.isEnabled()) {
+      return { allowed: true, reason: 'CPC API desabilitada' };
+    }
+
+    // 1. Validar se o contrato existe
+    const contractValidation = await this.validateContract(contract, segment, phone);
+    if (!contractValidation.sucesso) {
+      return {
+        allowed: false,
+        reason: contractValidation.mensagem,
+      };
+    }
+
+    // 2. Verificar se já existe acionamento no dia
+    const acionamentoCheck = await this.checkAcionamento(contract, phone, segment);
+    if (!acionamentoCheck.sucesso) {
+      return {
+        allowed: false,
+        reason: acionamentoCheck.mensagem,
+      };
+    }
+
+    return {
+      allowed: true,
+      reason: 'Cliente pode ser acionado',
+    };
+  }
+
+  /**
+   * Tratamento de erros da API
+   */
+  private handleApiError(error: unknown, endpoint: string): CpcApiResponse {
+    const axiosError = error as AxiosError<CpcApiResponse>;
+
+    if (axiosError.response) {
+      // Servidor respondeu com erro
+      const errorData = axiosError.response.data;
+      this.logger.error(
+        `CPC API ${endpoint} erro: ${axiosError.response.status} - ${JSON.stringify(errorData)}`,
+        axiosError.stack,
+        'CpcValidationService',
+      );
+
+      return {
+        sucesso: false,
+        mensagem: errorData?.mensagem || `Erro na API: ${axiosError.response.status}`,
+      };
+    } else if (axiosError.request) {
+      // Sem resposta do servidor
+      this.logger.error(
+        `CPC API ${endpoint} timeout/sem resposta`,
+        axiosError.stack,
+        'CpcValidationService',
+      );
+
+      return {
+        sucesso: false,
+        mensagem: 'API CPC indisponível - timeout',
+      };
+    } else {
+      // Erro de configuração
+      this.logger.error(
+        `CPC API ${endpoint} erro de configuração: ${axiosError.message}`,
+        axiosError.stack,
+        'CpcValidationService',
+      );
+
+      return {
+        sucesso: false,
+        mensagem: `Erro interno: ${axiosError.message}`,
+      };
+    }
+  }
+}
