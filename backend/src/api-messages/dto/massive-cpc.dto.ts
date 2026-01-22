@@ -164,5 +164,9 @@ export class SendTemplateExternalDto {
   @IsString()
   @IsOptional()
   tag?: string;
+
+  @IsString()
+  @IsOptional()
+  contract?: string;
 }
 

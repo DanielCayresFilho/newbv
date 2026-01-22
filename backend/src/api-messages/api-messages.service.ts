@@ -15,6 +15,8 @@ import { LinesService } from '../lines/lines.service';
 import { ControlPanelService } from '../control-panel/control-panel.service';
 import axios from 'axios';
 
+import { CpcValidationService } from '../cpc-validation/cpc-validation.service';
+
 @Injectable()
 export class ApiMessagesService {
   constructor(
@@ -32,7 +34,8 @@ export class ApiMessagesService {
     @Inject(forwardRef(() => LinesService))
     private linesService: LinesService,
     private controlPanelService: ControlPanelService,
-  ) {}
+    private cpcValidationService: CpcValidationService,
+  ) { }
 
   /**
    * Verifica se pode enviar mensagem CPC (Contato por Cliente)
@@ -55,7 +58,7 @@ export class ApiMessagesService {
 
     // Buscar primeira mensagem do operador (primeira interação)
     const firstOperatorMessage = conversations.find(c => c.sender === 'operator');
-    
+
     if (!firstOperatorMessage) {
       // Se não há mensagem do operador, pode enviar
       return { canSend: true };
@@ -80,10 +83,20 @@ export class ApiMessagesService {
       return { canSend: true };
     }
 
-    return {
-      canSend: false,
-      reason: `Cliente já recebeu mensagem há menos de 24h. Próximo envio permitido em ${(24 - hoursDiff).toFixed(1)} horas`,
-    };
+    // Método legado removido/substituído pela validação de API do parceiro
+    return { canSend: true };
+  }
+
+  /**
+   * Busca nome do segmento pelo ID
+   */
+  private async getSegmentName(segmentId: number | null): Promise<string | null> {
+    if (!segmentId) return null;
+    const segment = await this.prisma.segment.findUnique({
+      where: { id: segmentId },
+      select: { name: true },
+    });
+    return segment?.name || null;
   }
 
   /**
@@ -160,7 +173,7 @@ export class ApiMessagesService {
       // Para cada linha, verificar quantos operadores estão vinculados
       for (const line of filteredLines) {
         let operatorsCount = 0;
-        
+
         // No modo compartilhado, não verificar limite de operadores
         if (!sharedLineMode) {
           operatorsCount = await (this.prisma as any).lineOperator.count({
@@ -247,13 +260,13 @@ export class ApiMessagesService {
     try {
       await this.linesService.assignOperatorToLine(availableLine.id, operator.id);
       console.log(`✅ [ApiMessages] Linha ${availableLine.phone} atribuída automaticamente ao operador ${operator.email}`);
-      
+
       // Se encontrou linha padrão e operador tem segmento, atualizar o segmento da linha
       // Verificar se a linha pertence ao segmento "Padrão"
       const defaultSegment = await this.prisma.segment.findUnique({
         where: { name: 'Padrão' },
       });
-      
+
       if (defaultSegment && availableLine.segment === defaultSegment.id && operator.segment) {
         await this.prisma.linesStock.update({
           where: { id: availableLine.id },
@@ -342,7 +355,7 @@ export class ApiMessagesService {
     // Processar cada mensagem
     for (const message of dto.messages) {
       try {
-        // Validação de número: Verificar se o número é válido antes de processar
+        // 1. Validação de número
         const phoneValidation = this.phoneValidationService.isValidFormat(message.phone);
         if (!phoneValidation) {
           errors.push({
@@ -352,17 +365,25 @@ export class ApiMessagesService {
           continue;
         }
 
-        // Verificar CPC
-        const cpcCheck = await this.canSendCpcMessage(message.phone);
-        if (!cpcCheck.canSend) {
+        // 2. Verificar blocklist (antes de gastar recursos buscando operador)
+        const isBlocked = await this.prisma.blockList.findFirst({
+          where: {
+            OR: [
+              { phone: message.phone },
+              { cpf: message.contract },
+            ],
+          },
+        });
+
+        if (isBlocked) {
           errors.push({
             phone: message.phone,
-            reason: cpcCheck.reason || 'Bloqueado por regra CPC',
+            reason: 'Número ou CPF na lista de bloqueio',
           });
           continue;
         }
 
-        // Buscar operador
+        // 3. Buscar operador e garantir linha (antes do CPC pois precisamos do segmento do operador caso tag não tenha)
         const operator = await this.findOperatorBySpecialistCode(message.specialistCode);
 
         // Se operador não tem linha, atribuir automaticamente
@@ -381,7 +402,7 @@ export class ApiMessagesService {
           }
         }
 
-        // Buscar linha do operador
+        // 4. Buscar linha do operador
         const line = await this.prisma.linesStock.findUnique({
           where: { id: operatorLineId },
         });
@@ -394,7 +415,7 @@ export class ApiMessagesService {
           continue;
         }
 
-        // Rate Limiting: Verificar se a linha pode enviar mensagem
+        // 5. Rate Limiting
         const canSend = await this.rateLimitingService.canSendMessage(line.id);
         if (!canSend) {
           errors.push({
@@ -404,7 +425,7 @@ export class ApiMessagesService {
           continue;
         }
 
-        // Buscar Evolution
+        // 6. Buscar Evolution
         const evolution = await this.prisma.evolution.findUnique({
           where: { evolutionName: line.evolutionName },
         });
@@ -417,25 +438,37 @@ export class ApiMessagesService {
           continue;
         }
 
-        // Verificar blocklist
-        const isBlocked = await this.prisma.blockList.findFirst({
-          where: {
-            OR: [
-              { phone: message.phone },
-              { cpf: message.contract },
-            ],
-          },
-        });
-
-        if (isBlocked) {
-          errors.push({
-            phone: message.phone,
-            reason: 'Número ou CPF na lista de bloqueio',
-          });
-          continue;
+        // 7. Validação CPC via API do Parceiro
+        let contractCpc = message.contract;
+        if (!contractCpc) {
+          const existingContact = await this.contactsService.findByPhone(message.phone);
+          contractCpc = existingContact?.contract;
         }
 
-        // Determinar se deve usar template oficial
+        if (this.cpcValidationService.isEnabled() && contractCpc) {
+          // Precisamos do nome do segmento.
+          // tag entity já foi buscada anteriormente.
+          const segmentId = tag.segment || operator.segment;
+          const segmentName = await this.getSegmentName(segmentId);
+
+          if (segmentName) {
+            const validation = await this.cpcValidationService.canContact(
+              contractCpc,
+              message.phone,
+              segmentName
+            );
+
+            if (!validation.allowed) {
+              errors.push({
+                phone: message.phone,
+                reason: validation.reason || 'Bloqueado por regra CPC (Parceiro)',
+              });
+              continue;
+            }
+          }
+        }
+
+        // 8. Preparar envio (Template ou Texto)
         const useTemplate = message.useOfficialTemplate || dto.useOfficialTemplate;
         const templateId = message.templateId || dto.defaultTemplateId;
         const templateVariables = message.templateVariables || [];
@@ -473,15 +506,11 @@ export class ApiMessagesService {
           }
         }
 
-        // Enviar mensagem diretamente (sem typing indicator ou delay)
-
-        // Enviar mensagem
+        // 9. Enviar mensagem
         if (useTemplate && templateId && template) {
-          // Se linha oficial, enviar via Cloud API
           if (line.oficial && line.token && line.numberId) {
             sent = await this.sendTemplateViaCloudApi(line, template, message.phone, templateVariables);
           } else {
-            // Enviar via Evolution
             sent = await this.sendTemplateViaEvolution(line, evolution, template, message.phone, templateVariables);
           }
 
@@ -504,7 +533,7 @@ export class ApiMessagesService {
             line,
             evolution,
             message.phone,
-            message.mainTemplate,
+            finalMessage, // Use finalMessage after spintax
           );
         }
 
@@ -516,7 +545,7 @@ export class ApiMessagesService {
           continue;
         }
 
-        // Buscar ou criar contato
+        // 10. Atualizar/Criar Contato e Conversa
         let contact = await this.contactsService.findByPhone(message.phone);
         if (!contact) {
           contact = await this.contactsService.create({
@@ -548,9 +577,20 @@ export class ApiMessagesService {
           messageType: useTemplate ? 'template' : 'text',
         });
 
-        processed++;
+        // 11. Registrar sucesso na API CPC se aplicável
+        if (sent && this.cpcValidationService.isEnabled() && contractCpc) {
+          const segmentId = tag.segment || operator.segment;
+          const segmentName = await this.getSegmentName(segmentId);
+          if (segmentName) {
+            await this.cpcValidationService.registerAcionamento(
+              contractCpc,
+              message.phone,
+              segmentName
+            );
+          }
+        }
 
-        // (sem delay entre mensagens)
+        processed++;
       } catch (error) {
         errors.push({
           phone: message.phone,
@@ -745,10 +785,39 @@ export class ApiMessagesService {
         throw new BadRequestException('Número está na lista de bloqueio');
       }
 
-      // Verificar CPC
-      const cpcCheck = await this.canSendCpcMessage(dto.phone);
-      if (!cpcCheck.canSend) {
-        throw new BadRequestException(cpcCheck.reason || 'Bloqueado por regra CPC');
+      // Validar CPC (Parceiro)
+      // Tentar obter contrato do payload ou contato
+      let contractCpc = dto.contract;
+      let contactData: any = null;
+
+      if (!contractCpc) {
+        contactData = await this.contactsService.findByPhone(dto.phone);
+        contractCpc = contactData?.contract;
+      }
+
+      if (this.cpcValidationService.isEnabled() && contractCpc) {
+        // Tag pode vir no DTO
+        let segmentId = operator.segment; // Default do operador
+        if (dto.tag) {
+          const tagEntity = await this.tagsService.findByName(dto.tag);
+          if (tagEntity?.segment) {
+            segmentId = tagEntity.segment;
+          }
+        }
+
+        const segmentName = await this.getSegmentName(segmentId);
+
+        if (segmentName) {
+          const validation = await this.cpcValidationService.canContact(
+            contractCpc,
+            dto.phone,
+            segmentName
+          );
+
+          if (!validation.allowed) {
+            throw new BadRequestException(validation.reason || 'Bloqueado por regra CPC (Parceiro)');
+          }
+        }
       }
 
       // Buscar template
@@ -796,6 +865,22 @@ export class ApiMessagesService {
         });
 
         throw new BadRequestException('Falha ao enviar template');
+      }
+
+      // Registrar sucesso na API CPC
+      if (this.cpcValidationService.isEnabled() && contractCpc) {
+        // Recalcular segment (mesma lógica de cima, poderia extrair mas ok repetir aqui pelo escopo)
+        let segmentId = operator.segment;
+        if (dto.tag) {
+          const tagEntity = await this.tagsService.findByName(dto.tag);
+          if (tagEntity?.segment) {
+            segmentId = tagEntity.segment;
+          }
+        }
+        const segmentName = await this.getSegmentName(segmentId);
+        if (segmentName) {
+          await this.cpcValidationService.registerAcionamento(contractCpc, dto.phone, segmentName);
+        }
       }
 
       // Registrar envio de template
