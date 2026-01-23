@@ -50,6 +50,19 @@ export class CpcValidationService {
   }
 
   /**
+   * Remove prefixo 55 do telefone para enviar à API do parceiro
+   */
+  private formatPhoneForPartner(phone: string): string {
+    // Remove caracteres não numéricos
+    let cleanPhone = phone.replace(/\D/g, '');
+    // Remove prefixo 55 se existir
+    if (cleanPhone.startsWith('55') && cleanPhone.length > 11) {
+      cleanPhone = cleanPhone.substring(2);
+    }
+    return cleanPhone;
+  }
+
+  /**
    * Valida se o contrato existe na base do parceiro
    */
   async validateContract(
@@ -65,7 +78,8 @@ export class CpcValidationService {
       // Usar encodeURIComponent para garantir %20 em vez de + para espaços
       let queryString = `contrato=${encodeURIComponent(contract)}&segmento=${encodeURIComponent(segment)}`;
       if (phone) {
-        queryString += `&telefone=${encodeURIComponent(phone)}`;
+        const formattedPhone = this.formatPhoneForPartner(phone);
+        queryString += `&telefone=${encodeURIComponent(formattedPhone)}`;
       }
 
       const fullUrl = `${this.apiUrl}/validate-contract?${queryString}`;
@@ -109,7 +123,8 @@ export class CpcValidationService {
 
     try {
       // Usar encodeURIComponent para garantir %20 em vez de + para espaços
-      const queryString = `contrato=${encodeURIComponent(contract)}&telefone=${encodeURIComponent(phone)}&segmento=${encodeURIComponent(segment)}`;
+      const formattedPhone = this.formatPhoneForPartner(phone);
+      const queryString = `contrato=${encodeURIComponent(contract)}&telefone=${encodeURIComponent(formattedPhone)}&segmento=${encodeURIComponent(segment)}`;
 
       const fullUrl = `${this.apiUrl}/check-acionamento?${queryString}`;
       this.logger.log(
@@ -152,8 +167,9 @@ export class CpcValidationService {
 
     try {
       const fullUrl = `${this.apiUrl}/register-acionamento`;
+      const formattedPhone = this.formatPhoneForPartner(phone);
       const payload = {
-        telefone: phone,
+        telefone: formattedPhone,
         contrato: contract,
         segmento: segment,
       };
