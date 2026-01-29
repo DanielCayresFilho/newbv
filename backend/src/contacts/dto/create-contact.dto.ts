@@ -19,8 +19,8 @@ export class CreateContactDto {
   cpf?: string;
 
   @IsString()
-  @IsOptional()
-  contract?: string;
+  @IsNotEmpty()
+  contract: string;
 
   @Transform(({ value }) => {
     if (value === null || value === undefined || value === '') return false;

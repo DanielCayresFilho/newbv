@@ -5,10 +5,37 @@ import { UpdateContactDto } from './dto/update-contact.dto';
 
 @Injectable()
 export class ContactsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   async create(createContactDto: CreateContactDto) {
-    // Criar o contato
+    // Tentar encontrar ou criar o contato (upsert se tiver ID seria ideal, mas aqui é create)
+    // Como phone é unique, vamos verificar se já existe
+    const existingContact = await this.prisma.contact.findUnique({
+      where: { phone: createContactDto.phone },
+    });
+
+    if (existingContact) {
+      // Se o contato já existe, podemos atualizá-lo ou apenas retorná-lo.
+      // Vamos atualizar os dados para garantir que estão recentes
+      const updated = await this.prisma.contact.update({
+        where: { id: existingContact.id },
+        data: createContactDto,
+      });
+
+      // Atualizar conversas
+      if (createContactDto.name && createContactDto.name.trim() !== '') {
+        await this.prisma.conversation.updateMany({
+          where: {
+            contactPhone: existingContact.phone,
+            contactName: 'Desconhecido',
+          },
+          data: { contactName: createContactDto.name },
+        });
+      }
+      return updated;
+    }
+
+    // Se não existe, criar
     const contact = await this.prisma.contact.create({
       data: createContactDto,
     });
@@ -86,7 +113,7 @@ export class ContactsService {
   // Atualizar contato por telefone (útil para atualizar durante atendimento)
   async updateByPhone(phone: string, updateContactDto: UpdateContactDto) {
     const contact = await this.findByPhone(phone);
-    
+
     if (!contact) {
       throw new NotFoundException(`Contato com telefone ${phone} não encontrado`);
     }
