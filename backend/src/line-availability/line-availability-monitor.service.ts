@@ -141,10 +141,14 @@ export class LineAvailabilityMonitorService {
             instanceName
           );
 
-          // Se linha está banida ou desconectada, realocar
-          if (!lineStatus || lineStatus === 'ban' || lineStatus === 'disconnected' || lineStatus.toLowerCase() === 'ban' || lineStatus.toLowerCase() === 'disconnected') {
+          // Se linha está EXPLICITAMENTE banida ou desconectada, realocar
+          // IMPORTANTE: NÃO considerar 'null' ou 'undefined' como banida (pode ser apenas cache miss ou timeout)
+          const statusLower = lineStatus ? lineStatus.toLowerCase() : '';
+          const isExplicitlyBanned = statusLower === 'ban' || statusLower === 'banned' || statusLower === 'disconnected' || statusLower === 'close';
+
+          if (isExplicitlyBanned) {
             this.logger.warn(
-              `Linha ${line.phone} está ${lineStatus || 'desconectada'} na Evolution. Realocando para operador ${operator.name}...`,
+              `Linha ${line.phone} está ${lineStatus} na Evolution. Realocando para operador ${operator.name}...`,
               'LineAvailability',
               {
                 operatorId: operator.id,
