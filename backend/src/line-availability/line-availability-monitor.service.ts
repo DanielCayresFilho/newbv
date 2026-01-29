@@ -261,152 +261,153 @@ export class LineAvailabilityMonitorService {
             }
           }
         }
-      } catch (error) {
-        this.logger.error(
-          'Erro ao verificar status das linhas dos operadores',
-          error.stack,
-          'LineAvailability',
-          { error: error.message },
-        );
-      }
+      } // Chave que faltava
+    } catch (error) {
+      this.logger.error(
+        'Erro ao verificar status das linhas dos operadores',
+        error.stack,
+        'LineAvailability',
+        { error: error.message },
+      );
     }
+  }
 
   /**
    * Cron job: Processar fila de operadores a cada 5 segundos (otimizado para alocação rápida)
    */
   @Cron('*/5 * * * * *') // A cada 5 segundos
-    async processOperatorQueue(): Promise < void> {
-      try {
-        await this.queueService.processQueue();
-      } catch(error) {
-        this.logger.error(
-          'Erro ao processar fila de operadores',
-          error.stack,
-          'LineAvailability',
-          { error: error.message },
-        );
-      }
+  async processOperatorQueue(): Promise<void> {
+    try {
+      await this.queueService.processQueue();
+    } catch (error) {
+      this.logger.error(
+        'Erro ao processar fila de operadores',
+        error.stack,
+        'LineAvailability',
+        { error: error.message },
+      );
     }
+  }
 
-    /**
-     * Cron job: Balancear carga das linhas a cada 5 minutos
-     */
-    @Cron(CronExpression.EVERY_5_MINUTES)
-    async balanceLineLoad(): Promise < void> {
-      try {
-        await this.switchingService.balanceAllLines();
-      } catch(error) {
-        this.logger.error(
-          'Erro ao balancear carga de linhas',
-          error.stack,
-          'LineAvailability',
-          { error: error.message },
-        );
-      }
+  /**
+   * Cron job: Balancear carga das linhas a cada 5 minutos
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async balanceLineLoad(): Promise<void> {
+    try {
+      await this.switchingService.balanceAllLines();
+    } catch (error) {
+      this.logger.error(
+        'Erro ao balancear carga de linhas',
+        error.stack,
+        'LineAvailability',
+        { error: error.message },
+      );
     }
+  }
 
   /**
    * Retorna dados de monitoramento
    */
-  async getMonitoringData(): Promise < MonitoringData > {
-      // Buscar todas as linhas ativas
-      const activeLines = await this.prisma.linesStock.findMany({
-        where: {
-          lineStatus: 'active',
-        },
-        include: {
-          operators: {
-            include: {
-              user: true,
-            },
+  async getMonitoringData(): Promise<MonitoringData> {
+    // Buscar todas as linhas ativas
+    const activeLines = await this.prisma.linesStock.findMany({
+      where: {
+        lineStatus: 'active',
+      },
+      include: {
+        operators: {
+          include: {
+            user: true,
           },
         },
-      });
+      },
+    });
 
-      const totalActiveLines = activeLines.length;
-      const linesWithZeroOperators = activeLines.filter(l => l.operators.length === 0).length;
-      const linesWithOneOperator = activeLines.filter(l => l.operators.length === 1).length;
-      const linesWithTwoOperators = activeLines.filter(l => l.operators.length === 2).length;
-      const reserveLines = activeLines.filter(l => l.isReserve).length;
+    const totalActiveLines = activeLines.length;
+    const linesWithZeroOperators = activeLines.filter(l => l.operators.length === 0).length;
+    const linesWithOneOperator = activeLines.filter(l => l.operators.length === 1).length;
+    const linesWithTwoOperators = activeLines.filter(l => l.operators.length === 2).length;
+    const reserveLines = activeLines.filter(l => l.isReserve).length;
 
-      // Operadores online
-      const operatorsOnline = await this.prisma.user.count({
-        where: {
-          role: 'operator',
-          status: 'Online',
-        },
-      });
+    // Operadores online
+    const operatorsOnline = await this.prisma.user.count({
+      where: {
+        role: 'operator',
+        status: 'Online',
+      },
+    });
 
-      // Operadores sem linha (online mas sem vínculo em LineOperator)
-      const onlineOperators = await this.prisma.user.findMany({
-        where: {
-          role: 'operator',
-          status: 'Online',
-        },
-        include: {
-          lineOperators: true,
-        },
-      });
+    // Operadores sem linha (online mas sem vínculo em LineOperator)
+    const onlineOperators = await this.prisma.user.findMany({
+      where: {
+        role: 'operator',
+        status: 'Online',
+      },
+      include: {
+        lineOperators: true,
+      },
+    });
 
-      const operatorsWithoutLine = onlineOperators.filter(op => op.lineOperators.length === 0).length;
+    const operatorsWithoutLine = onlineOperators.filter(op => op.lineOperators.length === 0).length;
 
-      // Operadores na fila
-      const operatorsInQueue = await this.prisma.operatorQueue.count({
-        where: {
-          status: 'waiting',
-        },
-      });
+    // Operadores na fila
+    const operatorsInQueue = await this.prisma.operatorQueue.count({
+      where: {
+        status: 'waiting',
+      },
+    });
 
-      // Calcular disponibilidade
-      const reserveLinesAvailable = activeLines.filter(l => l.isReserve && l.operators.length === 0).length;
-      const normalLinesAvailable = activeLines.filter(l => !l.isReserve && l.operators.length < 2).length;
-      const totalSlotsAvailable = reserveLinesAvailable + (normalLinesAvailable * 2);
-      const totalSlotsMax = reserveLines + ((totalActiveLines - reserveLines) * 2);
+    // Calcular disponibilidade
+    const reserveLinesAvailable = activeLines.filter(l => l.isReserve && l.operators.length === 0).length;
+    const normalLinesAvailable = activeLines.filter(l => !l.isReserve && l.operators.length < 2).length;
+    const totalSlotsAvailable = reserveLinesAvailable + (normalLinesAvailable * 2);
+    const totalSlotsMax = reserveLines + ((totalActiveLines - reserveLines) * 2);
 
-      const availabilityPercent = totalSlotsMax > 0 ? (totalSlotsAvailable / totalSlotsMax) * 100 : 0;
+    const availabilityPercent = totalSlotsMax > 0 ? (totalSlotsAvailable / totalSlotsMax) * 100 : 0;
 
-      // Determinar severidade
-      let severity: 'INFO' | 'WARNING' | 'CRITICAL' = 'INFO';
-      if(availabilityPercent < 5) {
-        severity = 'CRITICAL';
-      } else if(availabilityPercent < 10) {
-        severity = 'WARNING';
-      }
+    // Determinar severidade
+    let severity: 'INFO' | 'WARNING' | 'CRITICAL' = 'INFO';
+    if (availabilityPercent < 5) {
+      severity = 'CRITICAL';
+    } else if (availabilityPercent < 10) {
+      severity = 'WARNING';
+    }
 
     // Buscar status das evolutions
     const evolutions = await this.prisma.evolution.findMany();
-      const evolutionsStatus = await Promise.all(
-        evolutions.map(async (evo) => {
-          const linesCount = await this.prisma.linesStock.count({
-            where: {
-              evolutionName: evo.evolutionName,
-              lineStatus: 'active',
-            },
-          });
+    const evolutionsStatus = await Promise.all(
+      evolutions.map(async (evo) => {
+        const linesCount = await this.prisma.linesStock.count({
+          where: {
+            evolutionName: evo.evolutionName,
+            lineStatus: 'active',
+          },
+        });
 
-          // Verificar se está ativa no Control Panel
-          const controlPanel = await this.prisma.controlPanel.findFirst({
-            where: { segmentId: null },
-          });
+        // Verificar se está ativa no Control Panel
+        const controlPanel = await this.prisma.controlPanel.findFirst({
+          where: { segmentId: null },
+        });
 
-          const activeEvolutions = controlPanel?.activeEvolutions
-            ? JSON.parse(controlPanel.activeEvolutions)
-            : null;
+        const activeEvolutions = controlPanel?.activeEvolutions
+          ? JSON.parse(controlPanel.activeEvolutions)
+          : null;
 
-          const isActive = activeEvolutions === null || activeEvolutions.includes(evo.evolutionName);
+        const isActive = activeEvolutions === null || activeEvolutions.includes(evo.evolutionName);
 
-          return {
-            name: evo.evolutionName,
-            active: isActive,
-            linesCount,
-          };
-        })
-      );
+        return {
+          name: evo.evolutionName,
+          active: isActive,
+          linesCount,
+        };
+      })
+    );
 
-      // Gerar alertas
-      const alerts: MonitoringData['alerts'] = [];
+    // Gerar alertas
+    const alerts: MonitoringData['alerts'] = [];
 
-      if(operatorsWithoutLine > 0) {
+    if (operatorsWithoutLine > 0) {
       alerts.push({
         severity: operatorsWithoutLine > 5 ? 'CRITICAL' : 'WARNING',
         message: `${operatorsWithoutLine} operador(es) online sem linha disponível`,
