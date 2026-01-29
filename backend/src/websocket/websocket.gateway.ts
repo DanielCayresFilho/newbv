@@ -553,7 +553,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('send-message')
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { contactPhone: string; message: string; messageType?: string; mediaUrl?: string; fileName?: string; isNewConversation?: boolean; templateId?: number; templateVariables?: TemplateVariableDto[]; base64?: string; mediaBase64?: string; isAdminTest?: boolean },
+    @MessageBody() data: { contactPhone: string; message: string; messageType?: string; mediaUrl?: string; fileName?: string; isNewConversation?: boolean; templateId?: number; templateVariables?: TemplateVariableDto[]; base64?: string; mediaBase64?: string; isAdminTest?: boolean; contract?: string },
   ) {
     const startTime = Date.now(); // Para métricas de latência
     const user = client.data.user;
@@ -1956,7 +1956,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
   private async recoverAndRetryMessage(
     client: Socket,
     user: any,
-    data: { contactPhone: string; message: string; messageType?: string; mediaUrl?: string; fileName?: string; isNewConversation?: boolean },
+    data: { contactPhone: string; message: string; messageType?: string; mediaUrl?: string; fileName?: string; isNewConversation?: boolean; templateId?: number; templateVariables?: TemplateVariableDto[]; base64?: string; mediaBase64?: string; isAdminTest?: boolean; contract?: string },
     originalError: any,
   ): Promise<{ success: boolean; conversation?: any; reason?: string }> {
     const maxRetries = 3;
