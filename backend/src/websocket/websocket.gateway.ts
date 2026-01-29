@@ -1147,6 +1147,34 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
               this.emitToSupervisors(user.segment, 'new_message', { message: conversation });
             }
 
+            // Registrar acionamento CPC no parceiro (Paschoalotto) - TAMBÉM PARA TEMPLATES
+            if (!isGroupTemplate && this.cpcValidationService.isEnabled()) {
+              const templateContact = await this.prisma.contact.findFirst({
+                where: { phone: data.contactPhone },
+              });
+              if (templateContact?.contract) {
+                try {
+                  let segmentName: string | null = null;
+                  if (user.segment) {
+                    const segmentInfo = await this.prisma.segment.findUnique({
+                      where: { id: user.segment },
+                    });
+                    segmentName = segmentInfo?.name || null;
+                  }
+                  if (segmentName) {
+                    await this.cpcValidationService.registerAcionamento(
+                      templateContact.contract,
+                      data.contactPhone,
+                      segmentName,
+                    );
+                    console.log(`✅ [WebSocket] CPC registrado com sucesso para template ${data.contactPhone}`);
+                  }
+                } catch (cpcError: any) {
+                  console.error(`❌ [WebSocket] Falha ao registrar CPC (template): ${cpcError.message}`);
+                }
+              }
+            }
+
             return { success: true, conversation, templateMessageId: templateResult.templateMessageId };
           } else {
             return { error: templateResult.error || 'Erro ao enviar template' };
