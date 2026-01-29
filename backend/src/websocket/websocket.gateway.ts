@@ -598,9 +598,13 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
             instanceName
           );
 
-          // Se linha está banida ou desconectada, realocar ANTES de enviar mensagem
-          if (!lineStatus || lineStatus === 'ban' || lineStatus === 'disconnected' || lineStatus.toLowerCase() === 'ban' || lineStatus.toLowerCase() === 'disconnected') {
-            console.warn(`⚠️ [WebSocket] Linha ${currentLine.phone} está ${lineStatus || 'desconectada'} antes de enviar mensagem. Marcando como banida e realocando...`);
+          // Se linha está EXPLICITAMENTE banida ou desconectada, realocar ANTES de enviar mensagem
+          // IMPORTANTE: NÃO considerar 'null' ou 'undefined' como banida (pode ser apenas cache miss ou timeout)
+          const statusLower = lineStatus ? lineStatus.toLowerCase() : '';
+          const isExplicitlyBanned = statusLower === 'ban' || statusLower === 'banned' || statusLower === 'disconnected' || statusLower === 'close';
+
+          if (isExplicitlyBanned) {
+            console.warn(`⚠️ [WebSocket] Linha ${currentLine.phone} está ${lineStatus} antes de enviar mensagem. Marcando como banida e realocando...`);
 
             try {
               // Realocar nova linha e marcar linha antiga como banida
