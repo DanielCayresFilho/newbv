@@ -912,6 +912,7 @@ export class ApiMessagesService {
           name: dto.contactName || 'Cliente',
           phone: dto.phone,
           segment,
+          contract: '', // Campo obrigatório, valor padrão vazio para criação via API
         });
       }
 

@@ -1759,6 +1759,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
             phone: data.contactPhone,
             segment: user.segment,
             isNameManual: false,
+            contract: '', // Campo obrigatório
           },
         });
 

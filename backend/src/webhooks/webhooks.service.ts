@@ -230,6 +230,7 @@ export class WebhooksService {
               phone: contactIdentifier,
               segment: line.segment,
               isNameManual: false, // Nome vindo do webhook, não é manual
+              contract: '', // Campo obrigatório, valor padrão vazio para criação via webhook
             },
           });
           console.log(`✅ [Webhook] Contato criado: ${contact.name} (${contactIdentifier}), IsGroup: ${isGroup}`);
@@ -745,6 +746,7 @@ export class WebhooksService {
                 phone: isGroup ? remoteJid : contactPhone,
                 segment: line.segment,
                 isNameManual: false,
+                contract: '', // Campo obrigatório
               },
             });
           }
