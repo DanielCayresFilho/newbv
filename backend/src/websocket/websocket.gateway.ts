@@ -1305,9 +1305,12 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
                     } else {
                       // Erro 400 pode ser problema com número/mensagem, não necessariamente com linha
                       console.warn(`⚠️ [WebSocket] Erro ${errorStatus} pode ser problema com número/mensagem, não com linha. Verificando...`);
-                      // Tentar verificar se há outras linhas disponíveis, mas só realocar se realmente necessário
-                      if (attempt >= 2) {
-                        // Na segunda tentativa, se ainda erro 400, pode ser problema com a linha
+                      // NÃO realocar para erros 400, pois é problema de dados (número inválido, etc)
+                      // Se for 400, não adianta trocar de linha, vai dar erro igual
+                      if (errorStatus === 400) {
+                        shouldReallocate = false;
+                      } else if (attempt >= 2) {
+                        // Para outros erros duvidosos, na segunda tentativa pode tentar trocar
                         shouldReallocate = true;
                       }
                     }
@@ -1386,14 +1389,22 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
             // Se não conseguiu realocar ou já tentou todas as vezes, marcar linha como banida e lançar erro
             if (attempt >= maxRetries) {
-              // SEMPRE marcar linha como banida após todas as tentativas falharem
-              console.error(`❌ [WebSocket] Todas as tentativas falharam. Marcando linha ${currentLineId} como banida.`);
-              try {
-                await this.linesService.handleBannedLine(currentLineId);
-                console.log(`✅ [WebSocket] Linha ${currentLineId} marcada como banida após falha de envio.`);
-              } catch (banError: any) {
-                console.error(`❌ [WebSocket] Erro ao marcar linha como banida:`, banError.message);
+              // Verificar se deve banir a linha: NÃO banir se erro for 400
+              const isBadRequest = errorStatus === 400;
+
+              if (!isBadRequest) {
+                // Se NÃO for erro 400, marcar como banida (assumindo que falhas repetidas indicam problema na linha)
+                console.error(`❌ [WebSocket] Todas as tentativas falharam. Marcando linha ${currentLineId} como banida.`);
+                try {
+                  await this.linesService.handleBannedLine(currentLineId);
+                  console.log(`✅ [WebSocket] Linha ${currentLineId} marcada como banida após falha de envio.`);
+                } catch (banError: any) {
+                  console.error(`❌ [WebSocket] Erro ao marcar linha como banida:`, banError.message);
+                }
+              } else {
+                console.error(`❌ [WebSocket] Falha após ${maxRetries} tentativas (Erro 400). Linha ${currentLineId} mantida ativa.`);
               }
+
               throw new Error(`Não foi possível enviar após ${maxRetries} tentativas. Último erro: ${errorMessage || 'Erro desconhecido'}`);
             }
           }
