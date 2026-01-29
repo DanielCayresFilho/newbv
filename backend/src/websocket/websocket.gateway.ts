@@ -1389,21 +1389,12 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
             // Se não conseguiu realocar ou já tentou todas as vezes, marcar linha como banida e lançar erro
             if (attempt >= maxRetries) {
-              // Verificar se deve banir a linha: NÃO banir se erro for 400
-              const isBadRequest = errorStatus === 400;
 
-              if (!isBadRequest) {
-                // Se NÃO for erro 400, marcar como banida (assumindo que falhas repetidas indicam problema na linha)
-                console.error(`❌ [WebSocket] Todas as tentativas falharam. Marcando linha ${currentLineId} como banida.`);
-                try {
-                  await this.linesService.handleBannedLine(currentLineId);
-                  console.log(`✅ [WebSocket] Linha ${currentLineId} marcada como banida após falha de envio.`);
-                } catch (banError: any) {
-                  console.error(`❌ [WebSocket] Erro ao marcar linha como banida:`, banError.message);
-                }
-              } else {
-                console.error(`❌ [WebSocket] Falha após ${maxRetries} tentativas (Erro 400). Linha ${currentLineId} mantida ativa.`);
-              }
+              // IMPORTANTE: NÃO banir linha aqui. O banimento é responsabilidade exclusiva do LineAvailabilityMonitorService
+              // Se a linha estiver realmente ruim, o monitor vai pegar em até 15s
+              console.error(`❌ [WebSocket] Falha após ${maxRetries} tentativas. Último erro: ${errorMessage}`);
+              console.warn(`⚠️ [WebSocket] Linha ${currentLineId} mantida ativa (banimento delegado ao Monitor de Disponibilidade).`);
+
 
               throw new Error(`Não foi possível enviar após ${maxRetries} tentativas. Último erro: ${errorMessage || 'Erro desconhecido'}`);
             }

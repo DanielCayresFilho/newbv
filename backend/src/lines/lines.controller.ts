@@ -141,4 +141,10 @@ export class LinesController {
     await this.linesService.assignOperatorToLine(+lineId, +operatorId);
     return { message: 'Operador atribuído à linha com sucesso' };
   }
+
+  @Get(':id/diagnose')
+  @Roles(Role.admin)
+  diagnose(@Param('id') id: string) {
+    return this.linesService.diagnoseLine(+id);
+  }
 }

@@ -58,6 +58,32 @@ export class HealthCheckCacheService {
   }
 
   /**
+   * Obtém o status de conexão de uma linha DIRETAMENTE (sem cache)
+   * Útil para verificações críticas antes de banir linha
+   */
+  async getConnectionStatusDirect(
+    evolutionUrl: string,
+    evolutionKey: string,
+    instanceName: string,
+  ): Promise<string> {
+    try {
+      const healthCheck = await axios.get(
+        `${evolutionUrl}/instance/connectionState/${instanceName}`,
+        {
+          headers: { 'apikey': evolutionKey },
+          timeout: 5000,
+        }
+      );
+
+      // Não atualiza cache para evitar poluição com dados de verificação de emergência
+      return healthCheck.data?.state || healthCheck.data?.status || 'unknown';
+    } catch (error) {
+      console.error(`❌ [HealthCheckCache] Erro ao verificar status direto:`, error.message);
+      return 'unknown';
+    }
+  }
+
+  /**
    * Limpa o cache de uma linha específica
    * @param evolutionUrl URL da Evolution API
    * @param instanceName Nome da instância

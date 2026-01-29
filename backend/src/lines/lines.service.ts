@@ -1918,4 +1918,56 @@ export class LinesService {
       // Não lançar erro, apenas logar - a linha foi criada com sucesso
     }
   }
+
+  /**
+   * Diagnóstico completo de uma linha
+   * Compara status do banco, cache interno e realtime da Evolution
+   */
+  async diagnoseLine(id: number) {
+    const line = await this.findOne(id);
+    const evolution = await this.prisma.evolution.findUnique({
+      where: { evolutionName: line.evolutionName },
+    });
+
+    if (!evolution) {
+      throw new NotFoundException('Evolution não encontrada para esta linha');
+    }
+
+    const instanceName = `line_${line.phone.replace(/\D/g, '')}`;
+
+    // 1. Status Direto (Realtime)
+    let directStatus = 'unknown';
+    try {
+      directStatus = await this.healthCheckCacheService.getConnectionStatusDirect(
+        evolution.evolutionUrl,
+        evolution.evolutionKey,
+        instanceName
+      );
+    } catch (e) {
+      directStatus = `error: ${e.message}`;
+    }
+
+    // 2. Status Cacheado
+    let cachedStatus = 'unknown';
+    try {
+      cachedStatus = await this.healthCheckCacheService.getConnectionStatus(
+        evolution.evolutionUrl,
+        evolution.evolutionKey,
+        instanceName
+      );
+    } catch (e) {
+      cachedStatus = `error: ${e.message}`;
+    }
+
+    return {
+      lineId: line.id,
+      phone: line.phone,
+      evolutionName: line.evolutionName,
+      dbStatus: line.lineStatus,
+      realtimeStatus: directStatus,
+      cachedStatus: cachedStatus,
+      isConsistent: directStatus === cachedStatus,
+      timestamp: new Date().toISOString()
+    };
+  }
 }

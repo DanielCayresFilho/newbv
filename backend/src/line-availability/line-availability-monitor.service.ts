@@ -147,231 +147,266 @@ export class LineAvailabilityMonitorService {
           const isExplicitlyBanned = statusLower === 'ban' || statusLower === 'banned' || statusLower === 'disconnected' || statusLower === 'close';
 
           if (isExplicitlyBanned) {
+            // VERIFICAÇÃO DUPLA: Antes de banir, checar novamente sem cache após 2 segundos
             this.logger.warn(
-              `Linha ${line.phone} está ${lineStatus} na Evolution. Realocando para operador ${operator.name}...`,
+              `Linha ${line.phone} detectada como ${lineStatus} (Cache). Iniciando verificação dupla...`,
               'LineAvailability',
               {
-                operatorId: operator.id,
-                operatorName: operator.name,
                 lineId: line.id,
-                linePhone: line.phone,
-                lineStatus: lineStatus || 'unknown',
-              },
+                operatorName: operator.name
+              }
             );
 
-            try {
-              // Realocar nova linha (mesma regra: mesmo segmento ou "Padrão")
-              // A função reallocateLineForOperator vai desvincular e marcar a linha como banida
-              const reallocationResult = await this.lineAssignmentService.reallocateLineForOperator(
-                operator.id,
-                operator.segment || null,
-                line.id, // oldLineId - linha banida
-                undefined, // traceId
-                true // markAsBanned = true - marca linha como banida e desvincula TODOS os operadores
+            // Aguardar 2 segundos
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Consultar status DIRETAMENTE (sem cache)
+            const directStatus = await this.healthCheckCacheService.getConnectionStatusDirect(
+              evolution.evolutionUrl,
+              evolution.evolutionKey,
+              instanceName
+            );
+
+            const directStatusLower = directStatus ? directStatus.toLowerCase() : '';
+            const confirmBanned = directStatusLower === 'ban' || directStatusLower === 'banned' || directStatusLower === 'disconnected' || directStatusLower === 'close';
+
+            if (confirmBanned) {
+              this.logger.warn(
+                `Linha ${line.phone} CONFIRMADA como ${directStatus} após verificação dupla. Realocando para operador ${operator.name}...`,
+                'LineAvailability',
+                {
+                  operatorId: operator.id,
+                  operatorName: operator.name,
+                  lineId: line.id,
+                  linePhone: line.phone,
+                  initialStatus: lineStatus,
+                  confirmedStatus: directStatus
+                },
               );
 
-              if (reallocationResult.success && reallocationResult.lineId) {
-                const newLine = await this.prisma.linesStock.findUnique({
-                  where: { id: reallocationResult.lineId },
-                });
+              try {
+                // Realocar nova linha e marcar antiga como banida
+                const reallocationResult = await this.lineAssignmentService.reallocateLineForOperator(
+                  operator.id,
+                  operator.segment || null,
+                  line.id, // oldLineId - linha banida
+                  undefined, // traceId
+                  true // markAsBanned = true
+                );
 
-                if (newLine) {
-                  this.logger.log(
-                    `Linha ${newLine.phone} realocada automaticamente para operador ${operator.name} após detectar linha banida`,
+                if (reallocationResult.success && reallocationResult.lineId) {
+                  const newLine = await this.prisma.linesStock.findUnique({
+                    where: { id: reallocationResult.lineId },
+                  });
+
+                  if (newLine) {
+                    this.logger.log(
+                      `Linha ${newLine.phone} realocada automaticamente para operador ${operator.name} após detectar linha banida`,
+                      'LineAvailability',
+                      {
+                        operatorId: operator.id,
+                        operatorName: operator.name,
+                        oldLineId: line.id,
+                        oldLinePhone: line.phone,
+                        newLineId: newLine.id,
+                        newLinePhone: newLine.phone,
+                      },
+                    );
+                  } else {
+                    this.logger.error(
+                      `Linha ${reallocationResult.lineId} não encontrada após realocação para operador ${operator.name}`,
+                      '',
+                      'LineAvailability',
+                      {
+                        operatorId: operator.id,
+                        lineId: reallocationResult.lineId,
+                      },
+                    );
+                  }
+                } else {
+                  this.logger.error(
+                    `Não foi possível realocar linha para operador ${operator.name}: ${reallocationResult.reason}`,
+                    '',
                     'LineAvailability',
                     {
                       operatorId: operator.id,
                       operatorName: operator.name,
                       oldLineId: line.id,
-                      oldLinePhone: line.phone,
-                      newLineId: newLine.id,
-                      newLinePhone: newLine.phone,
-                    },
-                  );
-                } else {
-                  this.logger.error(
-                    `Linha ${reallocationResult.lineId} não encontrada após realocação para operador ${operator.name}`,
-                    '',
-                    'LineAvailability',
-                    {
-                      operatorId: operator.id,
-                      lineId: reallocationResult.lineId,
+                      reason: reallocationResult.reason,
                     },
                   );
                 }
-              } else {
+              } catch (error: any) {
                 this.logger.error(
-                  `Não foi possível realocar linha para operador ${operator.name}: ${reallocationResult.reason}`,
-                  '',
+                  `Erro ao realocar linha para operador ${operator.name}`,
+                  error.stack,
                   'LineAvailability',
                   {
                     operatorId: operator.id,
-                    operatorName: operator.name,
-                    oldLineId: line.id,
-                    reason: reallocationResult.reason,
+                    error: error.message,
                   },
                 );
               }
-            } catch (error: any) {
-              this.logger.error(
-                `Erro ao realocar linha para operador ${operator.name}`,
-                error.stack,
+            } else {
+              this.logger.warn(
+                `Linha ${line.phone} NÃO confirmada como banida após verificação dupla (Status: ${directStatus}). Mantendo ativa.`,
                 'LineAvailability',
                 {
-                  operatorId: operator.id,
-                  error: error.message,
-                },
+                  lineId: line.id,
+                  operatorName: operator.name,
+                  initialStatus: lineStatus,
+                  confirmedStatus: directStatus
+                }
               );
             }
           }
         }
+      } catch (error) {
+        this.logger.error(
+          'Erro ao verificar status das linhas dos operadores',
+          error.stack,
+          'LineAvailability',
+          { error: error.message },
+        );
       }
-    } catch (error) {
-      this.logger.error(
-        'Erro ao verificar status das linhas dos operadores',
-        error.stack,
-        'LineAvailability',
-        { error: error.message },
-      );
     }
-  }
 
   /**
    * Cron job: Processar fila de operadores a cada 5 segundos (otimizado para alocação rápida)
    */
   @Cron('*/5 * * * * *') // A cada 5 segundos
-  async processOperatorQueue(): Promise<void> {
-    try {
-      await this.queueService.processQueue();
-    } catch (error) {
-      this.logger.error(
-        'Erro ao processar fila de operadores',
-        error.stack,
-        'LineAvailability',
-        { error: error.message },
-      );
+    async processOperatorQueue(): Promise < void> {
+      try {
+        await this.queueService.processQueue();
+      } catch(error) {
+        this.logger.error(
+          'Erro ao processar fila de operadores',
+          error.stack,
+          'LineAvailability',
+          { error: error.message },
+        );
+      }
     }
-  }
 
-  /**
-   * Cron job: Balancear carga das linhas a cada 5 minutos
-   */
-  @Cron(CronExpression.EVERY_5_MINUTES)
-  async balanceLineLoad(): Promise<void> {
-    try {
-      await this.switchingService.balanceAllLines();
-    } catch (error) {
-      this.logger.error(
-        'Erro ao balancear carga de linhas',
-        error.stack,
-        'LineAvailability',
-        { error: error.message },
-      );
+    /**
+     * Cron job: Balancear carga das linhas a cada 5 minutos
+     */
+    @Cron(CronExpression.EVERY_5_MINUTES)
+    async balanceLineLoad(): Promise < void> {
+      try {
+        await this.switchingService.balanceAllLines();
+      } catch(error) {
+        this.logger.error(
+          'Erro ao balancear carga de linhas',
+          error.stack,
+          'LineAvailability',
+          { error: error.message },
+        );
+      }
     }
-  }
 
   /**
    * Retorna dados de monitoramento
    */
-  async getMonitoringData(): Promise<MonitoringData> {
-    // Buscar todas as linhas ativas
-    const activeLines = await this.prisma.linesStock.findMany({
-      where: {
-        lineStatus: 'active',
-      },
-      include: {
-        operators: {
-          include: {
-            user: true,
+  async getMonitoringData(): Promise < MonitoringData > {
+      // Buscar todas as linhas ativas
+      const activeLines = await this.prisma.linesStock.findMany({
+        where: {
+          lineStatus: 'active',
+        },
+        include: {
+          operators: {
+            include: {
+              user: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    const totalActiveLines = activeLines.length;
-    const linesWithZeroOperators = activeLines.filter(l => l.operators.length === 0).length;
-    const linesWithOneOperator = activeLines.filter(l => l.operators.length === 1).length;
-    const linesWithTwoOperators = activeLines.filter(l => l.operators.length === 2).length;
-    const reserveLines = activeLines.filter(l => l.isReserve).length;
+      const totalActiveLines = activeLines.length;
+      const linesWithZeroOperators = activeLines.filter(l => l.operators.length === 0).length;
+      const linesWithOneOperator = activeLines.filter(l => l.operators.length === 1).length;
+      const linesWithTwoOperators = activeLines.filter(l => l.operators.length === 2).length;
+      const reserveLines = activeLines.filter(l => l.isReserve).length;
 
-    // Operadores online
-    const operatorsOnline = await this.prisma.user.count({
-      where: {
-        role: 'operator',
-        status: 'Online',
-      },
-    });
+      // Operadores online
+      const operatorsOnline = await this.prisma.user.count({
+        where: {
+          role: 'operator',
+          status: 'Online',
+        },
+      });
 
-    // Operadores sem linha (online mas sem vínculo em LineOperator)
-    const onlineOperators = await this.prisma.user.findMany({
-      where: {
-        role: 'operator',
-        status: 'Online',
-      },
-      include: {
-        lineOperators: true,
-      },
-    });
+      // Operadores sem linha (online mas sem vínculo em LineOperator)
+      const onlineOperators = await this.prisma.user.findMany({
+        where: {
+          role: 'operator',
+          status: 'Online',
+        },
+        include: {
+          lineOperators: true,
+        },
+      });
 
-    const operatorsWithoutLine = onlineOperators.filter(op => op.lineOperators.length === 0).length;
+      const operatorsWithoutLine = onlineOperators.filter(op => op.lineOperators.length === 0).length;
 
-    // Operadores na fila
-    const operatorsInQueue = await this.prisma.operatorQueue.count({
-      where: {
-        status: 'waiting',
-      },
-    });
+      // Operadores na fila
+      const operatorsInQueue = await this.prisma.operatorQueue.count({
+        where: {
+          status: 'waiting',
+        },
+      });
 
-    // Calcular disponibilidade
-    const reserveLinesAvailable = activeLines.filter(l => l.isReserve && l.operators.length === 0).length;
-    const normalLinesAvailable = activeLines.filter(l => !l.isReserve && l.operators.length < 2).length;
-    const totalSlotsAvailable = reserveLinesAvailable + (normalLinesAvailable * 2);
-    const totalSlotsMax = reserveLines + ((totalActiveLines - reserveLines) * 2);
+      // Calcular disponibilidade
+      const reserveLinesAvailable = activeLines.filter(l => l.isReserve && l.operators.length === 0).length;
+      const normalLinesAvailable = activeLines.filter(l => !l.isReserve && l.operators.length < 2).length;
+      const totalSlotsAvailable = reserveLinesAvailable + (normalLinesAvailable * 2);
+      const totalSlotsMax = reserveLines + ((totalActiveLines - reserveLines) * 2);
 
-    const availabilityPercent = totalSlotsMax > 0 ? (totalSlotsAvailable / totalSlotsMax) * 100 : 0;
+      const availabilityPercent = totalSlotsMax > 0 ? (totalSlotsAvailable / totalSlotsMax) * 100 : 0;
 
-    // Determinar severidade
-    let severity: 'INFO' | 'WARNING' | 'CRITICAL' = 'INFO';
-    if (availabilityPercent < 5) {
-      severity = 'CRITICAL';
-    } else if (availabilityPercent < 10) {
-      severity = 'WARNING';
-    }
+      // Determinar severidade
+      let severity: 'INFO' | 'WARNING' | 'CRITICAL' = 'INFO';
+      if(availabilityPercent < 5) {
+        severity = 'CRITICAL';
+      } else if(availabilityPercent < 10) {
+        severity = 'WARNING';
+      }
 
     // Buscar status das evolutions
     const evolutions = await this.prisma.evolution.findMany();
-    const evolutionsStatus = await Promise.all(
-      evolutions.map(async (evo) => {
-        const linesCount = await this.prisma.linesStock.count({
-          where: {
-            evolutionName: evo.evolutionName,
-            lineStatus: 'active',
-          },
-        });
+      const evolutionsStatus = await Promise.all(
+        evolutions.map(async (evo) => {
+          const linesCount = await this.prisma.linesStock.count({
+            where: {
+              evolutionName: evo.evolutionName,
+              lineStatus: 'active',
+            },
+          });
 
-        // Verificar se está ativa no Control Panel
-        const controlPanel = await this.prisma.controlPanel.findFirst({
-          where: { segmentId: null },
-        });
+          // Verificar se está ativa no Control Panel
+          const controlPanel = await this.prisma.controlPanel.findFirst({
+            where: { segmentId: null },
+          });
 
-        const activeEvolutions = controlPanel?.activeEvolutions
-          ? JSON.parse(controlPanel.activeEvolutions)
-          : null;
+          const activeEvolutions = controlPanel?.activeEvolutions
+            ? JSON.parse(controlPanel.activeEvolutions)
+            : null;
 
-        const isActive = activeEvolutions === null || activeEvolutions.includes(evo.evolutionName);
+          const isActive = activeEvolutions === null || activeEvolutions.includes(evo.evolutionName);
 
-        return {
-          name: evo.evolutionName,
-          active: isActive,
-          linesCount,
-        };
-      })
-    );
+          return {
+            name: evo.evolutionName,
+            active: isActive,
+            linesCount,
+          };
+        })
+      );
 
-    // Gerar alertas
-    const alerts: MonitoringData['alerts'] = [];
+      // Gerar alertas
+      const alerts: MonitoringData['alerts'] = [];
 
-    if (operatorsWithoutLine > 0) {
+      if(operatorsWithoutLine > 0) {
       alerts.push({
         severity: operatorsWithoutLine > 5 ? 'CRITICAL' : 'WARNING',
         message: `${operatorsWithoutLine} operador(es) online sem linha disponível`,
