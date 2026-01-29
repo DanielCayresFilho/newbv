@@ -1159,6 +1159,7 @@ export default function Atendimento() {
             templateVariables: variables,
             isNewConversation: true,
             isAdminTest: isAdminTestMode && user?.role === "admin",
+            contract: contactContractValue, // Enviar contrato para validação CPC
           });
         } else {
           // Enviar mensagem normal
@@ -1168,6 +1169,7 @@ export default function Atendimento() {
             messageType: "text",
             isNewConversation: true, // Indica que é 1x1 para verificar permissão
             isAdminTest: isAdminTestMode && user?.role === "admin",
+            contract: contactContractValue, // Enviar contrato para validação CPC
           });
         }
 

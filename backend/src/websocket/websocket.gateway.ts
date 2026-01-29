@@ -975,8 +975,13 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
           where: { phone: data.contactPhone },
         });
 
-        // Se contato tem contrato, validar com API CPC
-        if (contactForCpc?.contract) {
+        // Se contato tem contrato (ou veio no payload), validar com API CPC
+        let contractToUse = contactForCpc?.contract;
+        if (!contractToUse && data.contract) {
+          contractToUse = data.contract;
+        }
+
+        if (contractToUse) {
           // Buscar nome do segmento
           let segmentName: string | null = null;
           if (user.segment) {
@@ -988,7 +993,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
 
           if (segmentName) {
             const cpcResult = await this.cpcValidationService.canContact(
-              contactForCpc.contract,
+              contractToUse,
               data.contactPhone,
               segmentName,
             );
@@ -997,7 +1002,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
               this.logger.warn(
                 `CPC bloqueado para ${data.contactPhone}: ${cpcResult.reason}`,
                 'WebSocketGateway',
-                { userId: user.id, contactPhone: data.contactPhone, contract: contactForCpc.contract },
+                { userId: user.id, contactPhone: data.contactPhone, contract: contractToUse },
               );
 
               // Emitir evento de erro para o frontend exibir toast
@@ -1013,6 +1018,9 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
               };
             }
           }
+        } else if (data.isNewConversation && !contactForCpc) {
+          // Se é novo contato e não veio contrato, bloquear pois contrato é obrigatório para validação CPC
+          return { error: 'Contrato é obrigatório para iniciar conversa' };
         }
       }
 
@@ -1759,7 +1767,7 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
             phone: data.contactPhone,
             segment: user.segment,
             isNameManual: false,
-            contract: '', // Campo obrigatório
+            contract: data.contract || '', // Usar contrato do payload se disponível
           },
         });
 
@@ -1788,6 +1796,42 @@ export class WebsocketGateway implements OnGatewayConnection, OnGatewayDisconnec
       // Criar/atualizar vínculo de 24 horas entre conversa e operador (apenas para contatos individuais, não grupos)
       if (currentLineId && !isGroup) {
         await this.createOrUpdateConversationBinding(data.contactPhone, currentLineId, user.id);
+
+        // REGISTRAR ACIONAMENTO CPC (Fluxo: Envio Sucesso -> Registrar)
+        // Apenas para contatos individuais e se CPC habilitado
+        if (this.cpcValidationService.isEnabled()) {
+          try {
+            // Tentar obter contrato: do contato criado (DB) ou do payload
+            const finalContract = contact?.contract || data.contract;
+
+            if (finalContract && user.segment) {
+              // Recuperar nome do segmento (poderia otimizar cache, mas banco é seguro)
+              const segmentObj = await this.prisma.segment.findUnique({ where: { id: user.segment } });
+
+              if (segmentObj?.name) {
+                // Fire-and-forget para não travar o fluxo
+                this.cpcValidationService.registerAcionamento(
+                  finalContract,
+                  data.contactPhone,
+                  segmentObj.name
+                ).then(res => {
+                  if (res.sucesso) {
+                    console.log(`✅ [WebSocket] CPC registrado com sucesso para ${data.contactPhone}`);
+                    // Atualizar flag no contato
+                    this.prisma.contact.update({
+                      where: { id: contact.id },
+                      data: { isCPC: true, lastCPCAt: new Date() }
+                    }).catch(e => console.error('Erro ao atualizar flag CPC contato:', e));
+                  } else {
+                    console.warn(`⚠️ [WebSocket] Falha ao registrar CPC: ${res.mensagem}`);
+                  }
+                }).catch(err => console.error('❌ [WebSocket] Erro na chamada registerAcionamento:', err));
+              }
+            }
+          } catch (e) {
+            console.error('Erro ao preparar registro CPC:', e);
+          }
+        }
       }
 
       // Log apenas para mensagens enviadas com sucesso (fluxo principal)
